@@ -5,6 +5,7 @@ use std::path::Path;
 pub struct IndexerSpec {
     pub extension: String,
     pub mime_type: String,
+    pub case_insensitive: bool,
 }
 
 pub fn parse_indexer_specs(indexer_dir: &Path) -> Vec<IndexerSpec> {
@@ -32,9 +33,11 @@ pub fn parse_indexer_specs(indexer_dir: &Path) -> Vec<IndexerSpec> {
         );
 
         for extension in extensions {
+            let case_insensitive = is_case_insensitive_extension(&src, &extension);
             specs.push(IndexerSpec {
                 extension,
                 mime_type: mime_type.clone(),
+                case_insensitive,
             });
         }
     }
@@ -96,10 +99,12 @@ pub fn generate_install_sql(specs: &[IndexerSpec]) -> String {
     out.push_str("INSERT INTO properties (handlerId, name, value) VALUES ('com.notmarek.kompanion.extractor', 'lib', '@EXTRACTOR_LIB@');\n");
     out.push_str("INSERT INTO properties (handlerId, name, value) VALUES ('com.notmarek.kompanion.extractor', 'entry', 'load_extractor');\n");
     for spec in specs {
-        out.push_str(&format!(
-            "INSERT INTO associations (interface, handlerId, contentId, defaultAssoc) VALUES ('extractor', 'com.notmarek.kompanion.extractor', 'GL:*.{}', 'true');\n",
-            spec.extension
-        ));
+        for extension in extension_case_variants(spec) {
+            out.push_str(&format!(
+                "INSERT INTO associations (interface, handlerId, contentId, defaultAssoc) VALUES ('extractor', 'com.notmarek.kompanion.extractor', 'GL:*.{}', 'true');\n",
+                extension
+            ));
+        }
     }
     out.push_str("COMMIT;\n");
     out
@@ -176,6 +181,35 @@ fn extract_ends_with_extensions(src: &str) -> Vec<String> {
         rest = &rest[end + 1..];
     }
     extensions
+}
+
+fn is_case_insensitive_extension(src: &str, extension: &str) -> bool {
+    src.contains(&format!("to_ascii_lowercase().ends_with(\".{extension}\")"))
+}
+
+fn extension_case_variants(spec: &IndexerSpec) -> Vec<String> {
+    if !spec.case_insensitive {
+        return vec![spec.extension.clone()];
+    }
+
+    let mut variants = vec![String::new()];
+    for character in spec.extension.chars() {
+        if character.is_ascii_alphabetic() {
+            let mut uppercase_variants = variants.clone();
+            for variant in &mut variants {
+                variant.push(character.to_ascii_lowercase());
+            }
+            for variant in &mut uppercase_variants {
+                variant.push(character.to_ascii_uppercase());
+            }
+            variants.extend(uppercase_variants);
+        } else {
+            for variant in &mut variants {
+                variant.push(character);
+            }
+        }
+    }
+    variants
 }
 
 #[cfg(test)]
@@ -284,10 +318,12 @@ impl FileIndexer for CbzIndexer {
             IndexerSpec {
                 extension: "epub".into(),
                 mime_type: "application/epub+zip".into(),
+                case_insensitive: false,
             },
             IndexerSpec {
                 extension: "cbz".into(),
                 mime_type: "application/vnd.comicbook+zip".into(),
+                case_insensitive: false,
             },
         ];
 
@@ -313,19 +349,49 @@ impl FileIndexer for CbzIndexer {
     }
 
     #[test]
+    fn case_insensitive_epub_indexer_generates_every_case_variant_glob() {
+        let dir = FixtureDir::new();
+        fs::write(dir.0.join("mod.rs"), "pub mod epub;\n").unwrap();
+        write_module(
+            &dir.0,
+            "epub",
+            &EPUB_BODY.replace(
+                "filename.ends_with(\".epub\")",
+                "filename.to_ascii_lowercase().ends_with(\".epub\")",
+            ),
+        );
+
+        let specs = parse_indexer_specs(&dir.0);
+        let sql = generate_install_sql(&specs);
+
+        let extractor_rows = sql
+            .lines()
+            .filter(|line| line.contains("'extractor', 'com.notmarek.kompanion.extractor', 'GL:*."))
+            .collect::<Vec<_>>();
+
+        assert_eq!(extractor_rows.len(), 16);
+        assert!(sql.contains("'GL:*.epub'"));
+        assert!(sql.contains("'GL:*.EPUB'"));
+        assert!(sql.contains("'GL:*.EpUb'"));
+    }
+
+    #[test]
     fn launcher_association_dedupes_shared_mime_types() {
         let specs = vec![
             IndexerSpec {
                 extension: "fb2".into(),
                 mime_type: "application/fictionbook2+zip".into(),
+                case_insensitive: false,
             },
             IndexerSpec {
                 extension: "fbz".into(),
                 mime_type: "application/fictionbook2+zip".into(),
+                case_insensitive: false,
             },
             IndexerSpec {
                 extension: "fb2.zip".into(),
                 mime_type: "application/fictionbook2+zip".into(),
+                case_insensitive: false,
             },
         ];
 
@@ -352,10 +418,12 @@ impl FileIndexer for CbzIndexer {
             IndexerSpec {
                 extension: "epub".into(),
                 mime_type: "application/epub+zip".into(),
+                case_insensitive: false,
             },
             IndexerSpec {
                 extension: "cbz".into(),
                 mime_type: "application/vnd.comicbook+zip".into(),
+                case_insensitive: false,
             },
         ];
 

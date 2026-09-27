@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use epub_stream::book::EpubBookBuilder;
 use kompanion_core::indexer::{FileIndexer, IndexMetadata};
 
+use super::{generated_cover_path, prepare_cover_sidecar};
+
 pub struct EpubIndexer;
 
 impl FileIndexer for EpubIndexer {
     fn can_handle(&self, filename: &str) -> bool {
-        filename.ends_with(".epub")
+        filename.to_ascii_lowercase().ends_with(".epub")
     }
 
     fn extract_metadata(&self, full_path: &str) -> Result<IndexMetadata, String> {
@@ -76,10 +78,9 @@ impl FileIndexer for EpubIndexer {
         full_path: &str,
         _metadata: &IndexMetadata,
     ) -> Result<Option<String>, String> {
-        let sdr_path = format!("{}.sdr", full_path);
-        std::fs::create_dir_all(&sdr_path).map_err(|e| format!("Failed to create SDR: {}", e))?;
+        let sdr_path = prepare_cover_sidecar(full_path)?;
 
-        let cover = extract_cover_zip(full_path, &sdr_path)?;
+        let cover = extract_cover_zip(full_path, &sdr_path.to_string_lossy())?;
 
         Ok(cover)
     }
@@ -117,8 +118,7 @@ fn extract_cover_zip(epub_path: &str, sdr_path: &str) -> Result<Option<String>, 
         .unwrap_or("jpg")
         .to_lowercase();
 
-    let cover_file_name = format!("cover.{}", extension);
-    let cover_path = std::path::Path::new(sdr_path).join(&cover_file_name);
+    let cover_path = generated_cover_path(std::path::Path::new(sdr_path), &extension);
 
     std::fs::write(&cover_path, &buf).map_err(|e| format!("Failed to write cover: {}", e))?;
 
@@ -203,6 +203,18 @@ mod tests {
         let epub_path = tmp.join("test_cover.epub");
         create_minimal_epub(&epub_path.to_string_lossy());
 
+        let koreader_sdr = epub_path.with_extension("sdr");
+        std::fs::create_dir_all(&koreader_sdr).unwrap();
+        let metadata_path = koreader_sdr.join("metadata.epub.lua");
+        let custom_cover_path = koreader_sdr.join("cover.png");
+        std::fs::write(&metadata_path, b"return { reading_progress = 42 }").unwrap();
+        std::fs::write(&custom_cover_path, b"user-selected cover").unwrap();
+
+        let legacy_sdr = std::path::PathBuf::from(format!("{}.sdr", epub_path.display()));
+        std::fs::create_dir_all(&legacy_sdr).unwrap();
+        let legacy_cover_path = legacy_sdr.join("cover.jpg");
+        std::fs::write(&legacy_cover_path, b"old kompanion cover").unwrap();
+
         let indexer = EpubIndexer;
         let metadata = IndexMetadata::new(Some("Title".into()), Some("Author".into()), None);
         let cover = indexer
@@ -212,8 +224,19 @@ mod tests {
         assert!(cover.is_some());
         let cover_path = cover.unwrap();
         assert!(std::path::Path::new(&cover_path).exists());
-        assert!(cover_path.ends_with(".jpg"));
-        assert!(cover_path.contains(".sdr/cover."));
+        assert_eq!(
+            std::path::Path::new(&cover_path),
+            koreader_sdr.join("kompanion-cover.jpg")
+        );
+        assert_eq!(
+            std::fs::read(&metadata_path).unwrap(),
+            b"return { reading_progress = 42 }"
+        );
+        assert_eq!(
+            std::fs::read(&custom_cover_path).unwrap(),
+            b"user-selected cover"
+        );
+        assert!(!legacy_cover_path.exists());
     }
 
     #[test]
@@ -275,16 +298,18 @@ mod tests {
         assert!(cover.is_some());
         let cover_path = cover.unwrap();
         assert!(std::path::Path::new(&cover_path).exists());
-        assert!(cover_path.ends_with(".jpeg"));
-        assert!(cover_path.contains(".sdr/cover."));
+        assert!(cover_path.ends_with(".sdr/kompanion-cover.jpeg"));
     }
 
     #[test]
     fn test_epub_indexer_can_handle() {
         let indexer = EpubIndexer;
         assert!(indexer.can_handle("book.epub"));
+        assert!(indexer.can_handle("book.EPUB"));
+        assert!(indexer.can_handle("book.EpUb"));
         assert!(!indexer.can_handle("book.sh"));
         assert!(!indexer.can_handle("book.pdf"));
+        assert!(!indexer.can_handle("book.epub.bak"));
         assert_eq!(indexer.mime_type(), "application/epub+zip");
     }
 }

@@ -4,7 +4,7 @@ use kompanion_core::change_request::generate_change_request;
 
 use kompanion_sys::scanner::{get_scanner_manager, ScannerEventType};
 
-use crate::indexer::find_indexer;
+use crate::indexer::{find_indexer, remove_generated_covers};
 
 #[repr(C)]
 pub struct ScannerEvent {
@@ -138,10 +138,8 @@ extern "C" fn extractor_callback(event: *const ScannerEvent) -> c_int {
                 indexer.on_remove(&full_path);
             }
 
-            let sdr_path = format!("{}.sdr", full_path);
-            if std::path::Path::new(&sdr_path).exists() {
-                log::info!("SDR exists - deleting");
-                let _ = std::fs::remove_dir_all(&sdr_path);
+            if let Err(e) = remove_generated_covers(&full_path) {
+                log::error!("Failed to remove generated covers: {}", e);
             }
             0
         }
@@ -154,9 +152,6 @@ extern "C" fn extractor_callback(event: *const ScannerEvent) -> c_int {
             if indexer.supports_hooks() {
                 indexer.on_remove(&full_path);
             }
-            let sdr_path = format!("{}.sdr", full_path);
-            let _ = std::fs::remove_dir_all(&sdr_path);
-
             let mut new_uuid_buf = [0u8; 37];
             scanner.gen_uuid(&mut new_uuid_buf);
             let new_uuid = String::from_utf8(

@@ -9,6 +9,8 @@ use fb2::{Author, FictionBook, TitleInfo};
 use kompanion_core::indexer::{FileIndexer, IndexMetadata};
 use std::fs::File;
 
+use super::{generated_cover_path, prepare_cover_sidecar};
+
 pub struct Fb2Indexer;
 
 impl FileIndexer for Fb2Indexer {
@@ -45,11 +47,10 @@ impl FileIndexer for Fb2Indexer {
         full_path: &str,
         _metadata: &IndexMetadata,
     ) -> Result<Option<String>, String> {
-        let sdr_path = format!("{}.sdr", full_path);
-        std::fs::create_dir_all(&sdr_path).map_err(|e| format!("Failed to create SDR: {}", e))?;
+        let sdr_path = prepare_cover_sidecar(full_path)?;
 
         let book = parse_book(full_path)?;
-        extract_cover(&book, &sdr_path)
+        extract_cover(&book, &sdr_path.to_string_lossy())
     }
 
     fn mime_type(&self) -> &str {
@@ -166,8 +167,7 @@ fn extract_cover(book: &FictionBook, sdr_path: &str) -> Result<Option<String>, S
         .map_err(|e| format!("Failed to decode cover image: {e}"))?;
 
     let extension = image_extension(&binary.content_type, id);
-    let cover_file_name = format!("cover.{}", extension);
-    let cover_path = Path::new(sdr_path).join(&cover_file_name);
+    let cover_path = generated_cover_path(Path::new(sdr_path), &extension);
 
     std::fs::write(&cover_path, &bytes).map_err(|e| format!("Failed to write cover: {e}"))?;
 
@@ -390,7 +390,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert!(cover.ends_with(".sdr/cover.jpg"));
+        assert!(cover.ends_with(".sdr/kompanion-cover.jpg"));
         assert_eq!(std::fs::read(&cover).unwrap(), cover_bytes());
     }
 
@@ -413,7 +413,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert!(cover.ends_with(".sdr/cover.jpg"));
+        assert!(cover.ends_with(".sdr/kompanion-cover.jpg"));
         assert_eq!(std::fs::read(&cover).unwrap(), cover_bytes());
     }
 
@@ -437,7 +437,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert!(cover.ends_with(".sdr/cover.jpg"));
+        assert!(cover.ends_with(".sdr/kompanion-cover.jpg"));
         assert_eq!(std::fs::read(&cover).unwrap(), cover_bytes());
     }
 
@@ -492,7 +492,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(cover, None);
-        assert!(path.with_extension("fb2.sdr").is_dir());
+        assert!(path.with_extension("sdr").is_dir());
     }
 
     #[test]

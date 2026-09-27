@@ -8,6 +8,8 @@ use std::{
 use kompanion_core::indexer::{FileIndexer, IndexMetadata};
 use std::fs::File;
 
+use super::{generated_cover_path, prepare_cover_sidecar};
+
 /// Image extensions recognised as comic pages (matched case-insensitively).
 const IMAGE_EXTS: [&str; 5] = ["jpg", "jpeg", "png", "webp", "gif"];
 
@@ -81,10 +83,9 @@ impl FileIndexer for CbzIndexer {
         full_path: &str,
         _metadata: &IndexMetadata,
     ) -> Result<Option<String>, String> {
-        let sdr_path = format!("{}.sdr", full_path);
-        std::fs::create_dir_all(&sdr_path).map_err(|e| format!("Failed to create SDR: {}", e))?;
+        let sdr_path = prepare_cover_sidecar(full_path)?;
 
-        let cover = extract_cover_zip(full_path, &sdr_path)?;
+        let cover = extract_cover_zip(full_path, &sdr_path.to_string_lossy())?;
 
         Ok(cover)
     }
@@ -150,8 +151,7 @@ fn extract_cover_zip(cbz_path: &str, sdr_path: &str) -> Result<Option<String>, S
     let ext = images[chosen].2.clone();
 
     let mut file = archive.by_index(zip_index).map_err(|e| format!("{:?}", e))?;
-    let cover_file_name = format!("cover.{}", ext);
-    let cover_path = std::path::Path::new(sdr_path).join(&cover_file_name);
+    let cover_path = generated_cover_path(std::path::Path::new(sdr_path), &ext);
     let mut cover_file =
         File::create(&cover_path).map_err(|e| format!("Couldn't create cover file: {e:?}"))?;
     io::copy(&mut file, &mut cover_file).map_err(|e| format!("Couldn't extract cover: {e:?}"))?;
@@ -398,7 +398,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(std::fs::read(&cover).unwrap(), first_image);
-        assert!(cover.ends_with(".sdr/cover.png"));
+        assert!(cover.ends_with(".sdr/kompanion-cover.png"));
     }
 
     #[test]
@@ -419,7 +419,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(cover, None);
-        assert!(cbz_path.with_extension("cbz.sdr").is_dir());
+        assert!(cbz_path.with_extension("sdr").is_dir());
     }
 
     #[test]
@@ -461,7 +461,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(std::fs::read(&cover).unwrap(), page_one);
-        assert!(cover.ends_with(".sdr/cover.jpg"));
+        assert!(cover.ends_with(".sdr/kompanion-cover.jpg"));
     }
 
     #[test]
@@ -481,7 +481,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(std::fs::read(&cover).unwrap(), image);
-        assert!(cover.ends_with(".sdr/cover.webp"));
+        assert!(cover.ends_with(".sdr/kompanion-cover.webp"));
     }
 
     #[test]
